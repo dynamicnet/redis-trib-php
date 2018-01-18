@@ -604,7 +604,37 @@ function check_arity($req_args, $num_args){
 
 
 function print_log( $msg ){
-	echo $msg."\n";
+	$color = null;
+
+	switch( substr($msg,0,3) ){
+		case '>>>':
+			$color ="29;1";
+		break;
+		case '[ER':
+			$color ="31;1";
+		break;
+		case '[WA':
+			$color ="31;1";
+		break;
+		case '[OK':
+			$color ="32";
+		break;
+		case '***':
+			$color ="33";
+		break;
+	}
+
+	if($color){
+		print("\033[{$color}m");
+	}
+
+	print($msg);
+
+	if($color){
+		print("\033[0m");
+	}
+
+	print("\n");
 }
 
 
