@@ -1266,8 +1266,6 @@ function assert_empty( $node ){
 
 
 function _cmd(){
-
-	//$function = "_cmdCli";
 	$function = "_cmdInHouse";
 	//$function = "_cmd_cheprasov";
 
@@ -1301,44 +1299,6 @@ function _cmd_cheprasov(){
 	}
 
 	return trim($return);
-}
-
-// issues a redis command on a given node
-function _cmdCli(){
-	global $REDIS_CLI_BIN;
-
-	$argv = func_get_args();
-
-	$node = $argv[0];
-	$command = $argv[1];
-
-	$args = [];
-	foreach( array_slice($argv, 2) as $arg ){
-		if( "" === $arg ){ // Empty arg like for the migrate cmd, passed as '' in redis-cli
-			$arg = '""';
-		}
-		$args[] = $arg;
-	}
-	$params = implode(" ", $args);
-
-	print_log("RC: $node -> {$command} {$params}");
-
-	$cmd = "{$REDIS_CLI_BIN} --raw -h {$node->addr} -p {$node->port} {$command} {$params}";
-
-	$result = trim(`$cmd`);
-	print_log(">>: $result");
-
-	// reissue command on another host
-	if( RedisClient::is_move($result) ){
-		list(, $addr, $port) = RedisClient::extract_moved_info($result);
-
-		$argv[0] = new Node($addr.":".$port);
-
-		$result = call_user_func_array("_cmd", $argv);
-	}
-
-
-	return $result;
 }
 
 
@@ -1406,12 +1366,6 @@ class RedisClient {
 			return $this;
 		}
 
-		/*$rlen = count($args);
-		$output = '*'. $rlen . self::NL;
-		foreach ($args as $arg) {
-			$output .= '$'. strlen($arg) . self::NL . $arg . self::NL;
-		}*/
-
 		$output = ['*'.count($args)];
 		foreach( $args as $a ){
 			$output[] = '$'.strlen($a);
@@ -1419,8 +1373,6 @@ class RedisClient {
 		}
 
 		$command = implode("\r\n", $output)."\r\n";
-
-		//print_log("RC: $this->host:$this->port -> ".implode('\r\n', $output));
 
 		fwrite($this->handle, $command);
 		return $this->get_response();
@@ -1586,23 +1538,6 @@ class Cluster {
 
 
 //--------------------------------------------------------
-// Attempt to find the redis-cli binary
-//--------------------------------------------------------
-$tmp = explode(" ",`whereis -b redis-cli`);
-if( !isset($tmp[1]) ){
-	echo "Unable to find the redis-cli binary.";
-	exit(1);
-}
-
-$REDIS_CLI_BIN = $tmp[1];
-
-if( !is_executable($REDIS_CLI_BIN) ){
-	echo "The redis-cli binary located at '$REDIS_CLI_BIN' is not executable";
-	exit(1);
-}
-
-
-//--------------------------------------------------------
 // Definition of commands
 //--------------------------------------------------------
 
@@ -1666,19 +1601,5 @@ $subcommand_fct = $COMMANDS[$subcommand][0];
 list($cmd_options,$first_non_option) = parse_options($subcommand);
 check_arity($COMMANDS[$subcommand][1], $argc-($first_non_option));
 
-
-/*
-load_cluster_info_from_node(new Node("151.80.21.75:6379"));
-
-move_slot(
-	get_node_by_name('077756c42f9ef45af7303244e07f7d714ec876dc'),
-	get_node_by_name('fb64524acf5e07c7308236470ed1581b9835808e'),
-	3657,
-	$CLUSTER->get_masters()
-);
-*/
-
-
-//echo _cmd(new Node("149.202.164.161:6379"), "MIGRATE", "151.80.21.85", "6379","", "0", "10000", "KEYS", "2217aa3eda146fef3c2db4c78ce2a575 k1516118388 k1516140973 k1516151932");
 
 $subcommand_fct( array_slice($argv,$first_non_option) ,$cmd_options );

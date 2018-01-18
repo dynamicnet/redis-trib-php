@@ -9,3 +9,7 @@ Sometimes, you don't have a Ruby envrironnement and don't want to setup one in o
 redis-trib.php aims to do the same work as the original tool, but in PHP with 0 dependencies.
 
 The interface is the same as the original tool shipped with Redis. So any tutorial showing examples with the Ruby tool may work with the PHP tool.
+
+
+## DISCLAIMER
+ :warning: Not all commands or options of redis-trib.rb are available at the moment.
