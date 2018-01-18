@@ -1310,15 +1310,7 @@ function _cmdInHouse(){
 
 	$args = array_slice($argv, 1);
 
-	//print_log("RC: $node -> ".implode(" ", $args));
 	$return = $c->cmd($args);
-
-	/*if( is_array($return) ){
-		print_log(">>: ". implode("\n", $return));
-	} else {
-		print_log(">>: $return");
-	}*/
-
 
 	// reissue command on another host
 	if( RedisClient::is_move($return) ){
@@ -1348,7 +1340,12 @@ class RedisClient {
 	public function __construct($host, $port, $timeout = 60){
 		$this->host = $host;
 		$this->port = $port;
-		$this->handle = fsockopen($host, (int)$port, $errno, $errstr, 5);
+		$this->handle = @fsockopen($host, (int)$port, $errno, $errstr, 5);
+
+		if(false === $this->handle || $errno > 0){
+			print_log("[ERR] Sorry, can't connect to node {$host}:{$port}");
+			exit(1);
+		}
 
 		if (is_resource($this->handle)) {
 			stream_set_timeout($this->handle, $timeout);
