@@ -363,6 +363,13 @@ function addnode_cluster_cmd($args, $opts){
 	$existing_cluster_node = new Node($args[1]);
 	$added_node = new Node($args[0]);
 
+	print_log(">>> Adding node {$added_node} to cluster {$existing_cluster_node}");
+
+	// Check the existing cluster
+	load_cluster_info_from_node($existing_cluster_node);
+	print_log(">>> Performing Cluster Check (using node {$existing_cluster_node})");
+	check_cluster();
+
 
 	$cluster_ping = ping_node_isok( $existing_cluster_node );
 
@@ -371,9 +378,12 @@ function addnode_cluster_cmd($args, $opts){
 		exit(1);
 	}
 
-	ping_all_nodes( [$added_node] );
+	$node_ping = ping_node_isok( $added_node );
 
-	assert_empty( $added_node );
+	if( ! $node_ping ){
+		print_log("[ERR] Existing cluster node {$added_node} seems offline");
+		exit(1);
+	}
 
 
 	// Assert the new node is cluster ready
@@ -383,6 +393,8 @@ function addnode_cluster_cmd($args, $opts){
 		print_log( "[ERR] Node {$added_node} is not configured as a cluster node.");
 		exit(1);
 	}
+
+	assert_empty( $added_node );
 
 	// JOIN
 	print_log(">>> Send CLUSTER MEET to new node to make it join the cluster.");
@@ -398,10 +410,8 @@ function addnode_cluster_cmd($args, $opts){
 	}
 
 
-
-
 	// verify cluster
-	print_log("[OK] New node added correctly, maybe you need to rebalance.");
+	print_log("[OK] New node added correctly.");
 
 }
 
