@@ -7,6 +7,8 @@ define("CLUSTER_HASH_SLOTS_COUNT", 16384);
 $CLUSTER = new Cluster();
 
 function create_cluster_cmd($args, $opts){
+	global $CLUSTER;
+
 	$force_flush = isset($opts["force-flush"]);
 	$simulate    = isset($opts["simulate"]);
 
@@ -14,7 +16,9 @@ function create_cluster_cmd($args, $opts){
 
 
 	foreach ($args as $a) {
-		$master_nodes[] = new Node($a);
+		$n = new Node($a);
+		$n->is_master = true;
+		$master_nodes[] = $n;
 	}
 
 
@@ -54,14 +58,14 @@ function create_cluster_cmd($args, $opts){
 		}
 
 		// How many slot to allocate per node
-		$per_slot_memory = (CLUSTER_HASH_SLOTS_COUNT-1) / $memory_sum;
+		$per_slot_memory = (CLUSTER_HASH_SLOTS_COUNT) / $memory_sum;
 		$slot_index_current = -1;
 		foreach( $master_nodes as $node ){
 			$node_first_slot_index = $slot_index_current+1;
 
-			$node_slot_count = $per_slot_memory * $node->maxmemory;
+			$node_slot_count = round($per_slot_memory * $node->maxmemory);
 
-			$node_last_slot_index = floor($node_first_slot_index+$node_slot_count);
+			$node_last_slot_index = $node_first_slot_index+$node_slot_count-1;
 
 			$node->node_first_slot_index = $node_first_slot_index;
 			$node->node_last_slot_index = $node_last_slot_index;
@@ -75,10 +79,8 @@ function create_cluster_cmd($args, $opts){
 			$dbsize = _cmd($node, "DBSIZE");
 
 			if( $dbsize > 0 ){
-				if( $force_flush ){
-					if( !$simulate ){
-						$cmd = _cmd($node, "FLUSHALL");
-					}
+				if( $force_flush && !$simulate ){
+					$cmd = _cmd($node, "FLUSHALL");
 				} else {
 					print_log("[ERR] Node $node already store some keys");
 					exit(1);
@@ -111,28 +113,23 @@ function create_cluster_cmd($args, $opts){
 	// Allocate slots to each node
 		print_log(">>> Performing hash slots allocation on nodes...");
 
-		$global_i = 0;
 		foreach( $master_nodes as $node ){
-			print_log(">>> $node {$node->node_first_slot_index}-$node->node_last_slot_index");
+			print_log(">>> Allocate slot range {$node->node_first_slot_index}-{$node->node_last_slot_index} to {$node}");
 
-			for( $i = $node->node_first_slot_index; $i <= $node->node_last_slot_index ;$i++, $global_i++ ){
+			if( !$simulate ){
+				$args = array($node, "CLUSTER", "ADDSLOTS");
+				$args = array_merge($args, range($node->node_first_slot_index, $node->node_last_slot_index));
 
-				if( !$simulate ){
-					$reply = _cmd($node, "CLUSTER", "ADDSLOTS", $i);
+				$reply = call_user_func_array("_cmd", $args);;
 
-					if( "OK" != $reply ){
-						print_log( "[ERR] ".$reply );
-						exit(1);
-					}
-				}
-
-				if( $global_i%50 == 0 ){
-					echo $global_i.".";
+				if( "OK" != $reply ){
+					print_log( "[ERR] ".$reply );
+					exit(1);
 				}
 			}
 		}
 
-		print_log("\n[OK] Slots allocated to nodes");
+		print_log("[OK] Slots allocated to nodes");
 
 
 	// each nodes join cluster
@@ -154,14 +151,21 @@ function create_cluster_cmd($args, $opts){
 			}
 		}
 
-	sleep(5);
-
-	// verify cluster
 
 	if( !$simulate ){
-		print_log(">>> Performing Cluster Check");
-		check_config_consistency();
-		check_slots_coverage();
+		// Building the node collection
+		// this is needed for wait_cluster_join
+		$CLUSTER->reset();
+		foreach( $master_nodes as $node ){
+			$CLUSTER->add_node($node);
+		}
+
+		wait_cluster_join();
+
+		// verify cluster
+		$CLUSTER->reset();
+		load_cluster_info_from_node( new Node($args[0]) );
+		check_cluster();
 	}
 }
 
@@ -358,7 +362,7 @@ function rebalance_cluster_cmd($args, $opts){
 function addnode_cluster_cmd($args, $opts){
 	global $CLUSTER;
 
-	$simulate    = isset($opts["simulate"]);
+	$simulate = isset($opts["simulate"]);
 
 	$existing_cluster_node = new Node($args[1]);
 	$added_node = new Node($args[0]);
@@ -367,7 +371,6 @@ function addnode_cluster_cmd($args, $opts){
 
 	// Check the existing cluster
 	load_cluster_info_from_node($existing_cluster_node);
-	print_log(">>> Performing Cluster Check (using node {$existing_cluster_node})");
 	check_cluster();
 
 
@@ -396,6 +399,9 @@ function addnode_cluster_cmd($args, $opts){
 
 	assert_empty( $added_node );
 
+	// Add the new node to your Node collection
+	$CLUSTER->add_node($added_node);
+
 	// JOIN
 	print_log(">>> Send CLUSTER MEET to new node to make it join the cluster.");
 
@@ -406,7 +412,7 @@ function addnode_cluster_cmd($args, $opts){
 			print_log( "[ERR] ".$reply );
 		}
 
-		sleep(5);
+		wait_cluster_join();
 	}
 
 
@@ -456,9 +462,6 @@ function check_cluster_cmd($args, $opts){
 	$existing_cluster_node = new Node($args[0]);
 
 	load_cluster_info_from_node($existing_cluster_node);
-
-	print_log(">>> Performing Cluster Check (using node {$existing_cluster_node})");
-
 	check_cluster( $opts );
 }
 
@@ -594,13 +597,10 @@ function check_arity($req_args, $num_args){
 		($req_args < 0 and $num_args < abs($req_args))
 	){
 
-		echo "[ERR] Wrong number of arguments for specified sub command\n";
+		print_log("[ERR] Wrong number of arguments for specified sub command");
 		exit(1);
 	}
 }
-
-
-
 
 
 function print_log( $msg ){
@@ -643,7 +643,7 @@ function is_config_consistent(){
 
 	$signatures = array();
 
-	foreach( $CLUSTER->get_masters() as &$node ){
+	foreach( $CLUSTER->get_masters() as $node ){
 		$signatures[] = get_config_signature($node);
 	}
 
@@ -662,12 +662,16 @@ function get_config_signature($node){
 	foreach( $lines as $line ){
 		$s = explode(" ", $line);
 
-		// Remove migrations infos
-		$s[8] = preg_replace("/\[.*\]/U", "", $s[8]);
+		$slots_str = "";
+
+		if( isset($s[8]) ){ // during a "wait_cluster_join" $s[8] may be inexistent
+			// Remove migrations infos
+			$slots_str = preg_replace("/\[.*\]/U", "", $s[8]);
+		}
 
 		$config[$s[0]] = array(
 			"id"     => $s[0],
-			"slots"  => $s[8]
+			"slots"  => $slots_str
 		);
 	}
 
@@ -685,6 +689,7 @@ function check_config_consistency(){
 		exit;
 	}
 }
+
 
 function covered_slots(){
 	global $CLUSTER;
@@ -706,6 +711,7 @@ function covered_slots(){
 
 	return $slots;
 }
+
 
 // always return an array
 // ex:
@@ -753,7 +759,10 @@ function parse_slots_string( $slots_str ){
 	];
 }
 
+
 function check_slots_coverage(){
+	print_log(">>> Check slots coverage...");
+
 	$slots = covered_slots();
 
 	if(CLUSTER_HASH_SLOTS_COUNT == count($slots)){
@@ -809,6 +818,7 @@ function node_get_maxmemory(Node $node){
 	return $maxmemory;
 }
 
+
 function assert_cluster(Node $node){
 	$reply = _cmd($node, "INFO", "CLUSTER");
 
@@ -821,7 +831,6 @@ function load_cluster_info_from_node($node){
 	global $CLUSTER;
 
 	$CLUSTER->reset();
-
 	$reply = _cmd($node, "CLUSTER", "NODES");
 
 	$lines = explode("\n", $reply);
@@ -892,7 +901,7 @@ function show_cluster_info(){
 
 		$line[] = str_pad($i->addr.":".$i->port, 22, " ", STR_PAD_RIGHT);
 		$line[] = $i->name;
-		$line[] = str_pad($i->dbsize." keys", 10, " ", STR_PAD_LEFT);
+		$line[] = str_pad($i->dbsize." keys", 11, " ", STR_PAD_LEFT);
 		$line[] = str_pad(count($i->slots)." slots", 11, " ", STR_PAD_LEFT);
 		$line[] = "migrating ".count($i->migrating)."(". implode(",", array_keys($i->migrating)) .")";
 		$line[] = "importing ".count($i->importing)."(". implode(",", array_keys($i->importing)) .")";
@@ -911,8 +920,9 @@ function show_cluster_info(){
 		$lines[] = "[ERR] Seems that all ".CLUSTER_HASH_SLOTS_COUNT." are not covered.";
 	}
 
-	echo implode("\n", $lines)."\n";
+	array_walk($lines, "print_log");
 }
+
 
 // Move slots between source and target nodes using MIGRATE.
 //
@@ -978,6 +988,7 @@ function get_node_by_name($nodeid){
 	return false;
 }
 
+
 function get_node_by_abbreviated_name($partial_node_id){
 	global $CLUSTER;
 
@@ -996,6 +1007,7 @@ function get_node_by_abbreviated_name($partial_node_id){
 	return false;
 }
 
+
 function forget_node($node, $nodeid_delete){
 	$r = _cmd($node, "CLUSTER", "FORGET", $nodeid_delete);
 
@@ -1006,6 +1018,7 @@ function forget_node($node, $nodeid_delete){
 
 	return true;
 }
+
 
 function shutdown_node( Node $node ){
 	$r = _cmd($node, "SHUTDOWN");
@@ -1018,6 +1031,7 @@ function shutdown_node( Node $node ){
 	return true;
 }
 
+
 // handle ipv6 and ipv4 + port
 function addr_and_port( $str ){
 	$tmp = explode(":" , $str);
@@ -1027,11 +1041,18 @@ function addr_and_port( $str ){
 	return [$addr, $port];
 }
 
+
 function check_cluster( $opts = [] ){
+	global $CLUSTER;
+
+	$node = $CLUSTER->nodes[0];
+	print_log(">>> Performing Cluster Check (using node {$node})");
+
 	check_config_consistency();
 	check_open_slots( $opts );
 	check_slots_coverage();
 }
+
 
 function check_open_slots( $opts ){
 	global $CLUSTER;
@@ -1070,6 +1091,7 @@ function check_open_slots( $opts ){
 		}
 	}
 }
+
 
 function fix_open_slot( $slot ){
 	global $CLUSTER;
@@ -1261,6 +1283,7 @@ function get_node_with_most_keys_in_slot($nodes, $slot){
 	return $best;
 }
 
+
 // Return the owner of the specified slot
 function get_slot_owners($slot){
 	global $CLUSTER;
@@ -1276,6 +1299,7 @@ function get_slot_owners($slot){
 	return $owners;
 }
 
+
 function get_countkeysinslot($node, $slot){
 	$r = _cmd($node, "CLUSTER", "COUNTKEYSINSLOT", $slot);
 
@@ -1283,6 +1307,7 @@ function get_countkeysinslot($node, $slot){
 
 	return $keys_count;
 }
+
 
 function get_keysinslot( $node, $slot, $count ){
 	$keys = _cmd($node, "CLUSTER", "GETKEYSINSLOT", $slot, $count);
@@ -1294,6 +1319,7 @@ function get_keysinslot( $node, $slot, $count ){
 	return array_filter($keys);
 }
 
+
 function assert_empty( $node ){
 	$node_cluster_info = _cmd($node, "CLUSTER", "INFO");
 	$dbsize = _cmd($node, "DBSIZE");
@@ -1302,6 +1328,18 @@ function assert_empty( $node ){
 		print_log("[ERR] Node {$node} is not empty. Either the node already knows other nodes (check with CLUSTER NODES) or contains some key in database 0.");
 		exit(1);
 	}
+}
+
+
+function wait_cluster_join(){
+	print("Waiting for the cluster to join");
+
+	while( ! is_config_consistent() ){
+		print(".");
+		sleep(1);
+	}
+
+	print("\n");
 }
 
 
@@ -1363,6 +1401,7 @@ function _cmdInHouse(){
 
 	return $return;
 }
+
 
 /**
 *	Mostly insipired from https://github.com/ziogas/PHP-Redis-implementation
@@ -1517,9 +1556,6 @@ class RedisClient {
 		return [$slot,$addr,(int)$port];
 	}
 }
-
-
-
 
 
 class Node {
