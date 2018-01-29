@@ -1,6 +1,7 @@
 #!/usr/bin/env php
 <?php
 define("CLUSTER_HASH_SLOTS_COUNT", 16384);
+define("REBALANCE_DEFAULT_THRESHOLD", 2);
 
 
 // A collection of "Node" objects
@@ -191,6 +192,7 @@ function rebalance_cluster_cmd($args, $opts){
 
 	$simulate = isset($opts["simulate"]);
 	$useempty = isset($opts["use-empty-masters"]);
+	$threshold = isset($opts["threshold"]) ? intval($opts["threshold"]) : REBALANCE_DEFAULT_THRESHOLD;
 
 	$existing_cluster_node = new Node($args[0]);
 
@@ -244,18 +246,47 @@ function rebalance_cluster_cmd($args, $opts){
 			$node->target_slot_count = round($per_slot_memory * $node->maxmemory);
 		}
 
-	// calcule combien des slots doit accueillir chaque node pour une répartition équitable
+		// Calculate the slots balance for each node. It's the number of
+		// slots the node should lose (if positive) or gain (if negative)
+		// in order to be balanced.
 		$total_balance = 0;
 		$has_negative_balance = false;
+		$threshold_reached = false;
 
 		foreach( $MASTERS_NODES as $node ){
 			$balance = count($node->slots)-$node->target_slot_count;
 			$node->balance = $balance;
 			$total_balance = $total_balance+$balance;
 
+			// Compute the percentage of difference between the
+			// expected number of slots and the real one, to see
+			// if it's over the threshold specified by the user.
+			$over_threshold = false;
+
+			if( $threshold > 0 ){
+				if( count($node->slots) > 0 ){
+					$err_perc = abs(100-(100*$node->target_slot_count/count($node->slots)));
+
+					if($err_perc > $threshold){
+						$over_threshold = true;
+					}
+				} elseif( $expected > 0 ){
+					$over_threshold = true;
+				}
+			}
+
+			if( $over_threshold > 0 ){
+				$threshold_reached = true;
+			}
+
 			if( $balance < 0 ){
 				$has_negative_balance = true;
 			}
+		}
+
+		if( false === $threshold_reached){
+			print_log("*** No rebalancing needed! All nodes are within the {$threshold}% threshold.");
+			exit(0)	;
 		}
 
 
@@ -538,7 +569,6 @@ function parse_options($subcommand){
 		if( "--" == substr( $argv[$idx],0,2 ) ){
 			$option = substr($argv[$idx], 2);
 			$idx++;
-
 			// --verbose is a global option
 			if("verbose" == $option){
 				$options["verbose"] = true;
@@ -563,9 +593,10 @@ function parse_options($subcommand){
 				$value = true;
 			}
 
+
 			# If the option is set to [], it's a multiple arguments
 			# option. We just queue every new value into an array.
-			if( $ALLOWED_OPTIONS[$subcommand][$option] == "[]" ){
+			if( $ALLOWED_OPTIONS[$subcommand][$option] === "[]" ){
 				if( !isset($options[$option]) ){ $options[$option] = []; }
 				$options[$option][] = $value;
 			} else {
@@ -1631,7 +1662,7 @@ define('REQUIRED', "yes");
 $ALLOWED_OPTIONS=[
 	"create"     => ["simulate" => false, "force-flush" => false],
 	"add-node"   => ["simulate" => false],
-	"rebalance"  => ["simulate" => false, "weight" => "[]", "use-empty-masters"=>false]
+	"rebalance"  => ["simulate" => false, "weight" => "[]", "use-empty-masters"=>false, "threshold" => true]
 ];
 
 function show_help(){
