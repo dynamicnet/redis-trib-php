@@ -8,7 +8,7 @@ Sometimes, you don't have a Ruby envrironnement and don't want to setup one in o
 
 redis-trib.php aims to do the same work as the original tool, but with PHP and no dependency.
 
-The interface is the same as the original tool shipped with Redis. So any tutorial showing examples with the Ruby tool may work with the PHP tool.
+The interface is the same as the original tool shipped with Redis. So any tutorial showing examples with the Ruby tool may work with this PHP tool.
 
 
 ## Install manually
@@ -27,6 +27,8 @@ Pick the latest release at https://github.com/dynamicnet/redis-trib-php/releases
 
 ## Commands
 
+the `create`, `add-node`, `rebalance` commands have a _--simulate_ option that permit to test command line without issuing write commands to the cluster.
+
 ### create
 Create a cluster using a list of node. All nodes must be empty. If you have non empty nodes, you can use --force-flush to flush the redis DB, be carful with this option.
 
@@ -37,11 +39,32 @@ Create a cluster with 3 nodes
 ~# redis-trib.php create 127.0.0.1:6379 127.0.0.1:6380 127.0.0.1:6381
 ```
 
+### info
+Displays informations about the cluster. List of node, slot allocations, number of keys, opens slots.
+
+```console
+~# redis-trib.php info 127.0.0.1:6379
+```
+
 ### check
 Performs a sanity check of the cluster.
 
 ```console
 ~# redis-trib.php create 127.0.0.1:6379
+```
+
+### fix
+Try to fix some problems in a cluster, for example opens slots after an interrupted rebalance/resharding.
+
+```console
+~# redis-trib.php fix 127.0.0.1:6379
+```
+
+### rebalance
+Calculate, dispatch and move slots and keys in order to get a well balanced cluster according to the memory allocated to each node.
+
+```console
+~# redis-trib.php rebalance 127.0.0.1:6379
 ```
 
 
