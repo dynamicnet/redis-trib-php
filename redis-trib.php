@@ -226,10 +226,8 @@ function rebalance_cluster_cmd($args, $opts){
 		foreach( $MASTERS_NODES as $node ){
 			if( ! $useempty && 0 == count($node->slots)){
 				$maxmemory = 0;
-				continue;
 			} elseif( isset($weights[$node->name]) ){
 				$maxmemory = $weights[$node->name];
-				continue;
 			} else {
 				$maxmemory = node_get_maxmemory($node);
 			}
@@ -458,7 +456,7 @@ function delnode_cluster_cmd($args, $opts){
 	$existing_cluster_node = new Node($args[0]);
 	$nodeid_delete = $args[1];
 
-	print_log(">>> Removing node {$nodeid_delete} from cluster {$existing_cluster_node->addr}:{$existing_cluster_node->port}");
+	print_log(">>> Removing node {$nodeid_delete} from cluster {$existing_cluster_node}");
 
 	load_cluster_info_from_node($existing_cluster_node);
 
