@@ -194,6 +194,7 @@ function rebalance_cluster_cmd($args, $opts){
 	$simulate = isset($opts["simulate"]);
 	$useempty = isset($opts["use-empty-masters"]);
 	$threshold = isset($opts["threshold"]) ? intval($opts["threshold"]) : REBALANCE_DEFAULT_THRESHOLD;
+	$pipeline  = isset($opts["pipeline"]) ? intval($opts["pipeline"]) : MIGRATE_DEFAULT_PIPELINE;
 
 	$existing_cluster_node = new Node($args[0]);
 
@@ -371,7 +372,8 @@ function rebalance_cluster_cmd($args, $opts){
 					$slot,
 					$MASTERS_NODES,
 					["quiet"=>true,
-					"update"=>true]
+					"update"=>true,
+					"pipeline"=>$pipeline]
 				);
 
 				echo "#";
@@ -1001,7 +1003,7 @@ function move_slot( $src, $dst, $slot, $nodes, $opts=[]){
 	$fix      = ( isset($opts["fix"])&&$opts["fix"] );
 	$quiet    = ( isset($opts["quiet"])&&$opts["quiet"] );
 	$update   = ( isset($opts["update"])&&$opts["update"] );
-	$pipeline = isset($opts["pipeline"]) ? (int)$opts["update"] : MIGRATE_DEFAULT_PIPELINE;
+	$pipeline = isset($opts["pipeline"]) ? intval($opts["pipeline"]) : MIGRATE_DEFAULT_PIPELINE;
 
 	if( ! $quiet ){
 		print_log("Moving slot {$slot} from {$src} to {$dst}");
@@ -1678,7 +1680,7 @@ define('REQUIRED', "yes");
 $ALLOWED_OPTIONS=[
 	"create"     => ["simulate" => false, "force-flush" => false],
 	"add-node"   => ["simulate" => false],
-	"rebalance"  => ["simulate" => false, "weight" => "[]", "use-empty-masters"=>false, "threshold" => true]
+	"rebalance"  => ["simulate" => false, "weight" => "[]", "use-empty-masters"=>false, "threshold" => true, "pipeline" => true]
 ];
 
 function show_help(){
