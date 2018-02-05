@@ -2,6 +2,7 @@
 <?php
 define("CLUSTER_HASH_SLOTS_COUNT", 16384);
 define("REBALANCE_DEFAULT_THRESHOLD", 2);
+define("MIGRATE_DEFAULT_PIPELINE", 10);
 
 
 // A collection of "Node" objects
@@ -996,10 +997,11 @@ function show_cluster_info(){
 // update  -- Update node->slots for source/target nodes.
 // quiet   -- Don't print info messages.
 function move_slot( $src, $dst, $slot, $nodes, $opts=[]){
-	$cold   = ( isset($opts["cold"])&&$opts["cold"] );
-	$fix    = ( isset($opts["fix"])&&$opts["fix"] );
-	$quiet  = ( isset($opts["quiet"])&&$opts["quiet"] );
-	$update = ( isset($opts["update"])&&$opts["update"] );
+	$cold     = ( isset($opts["cold"])&&$opts["cold"] );
+	$fix      = ( isset($opts["fix"])&&$opts["fix"] );
+	$quiet    = ( isset($opts["quiet"])&&$opts["quiet"] );
+	$update   = ( isset($opts["update"])&&$opts["update"] );
+	$pipeline = isset($opts["pipeline"]) ? (int)$opts["update"] : MIGRATE_DEFAULT_PIPELINE;
 
 	if( ! $quiet ){
 		print_log("Moving slot {$slot} from {$src} to {$dst}");
@@ -1015,19 +1017,15 @@ function move_slot( $src, $dst, $slot, $nodes, $opts=[]){
 			if("OK" != $r){print_log("[ERR][".__LINE__."] $r");exit(1);}
 	}
 
-
-
-	$pipeline = 1;
-
 	while( true ){
 		$keys = get_keysinslot($src, $slot, $pipeline);
 
 		if( 0 == count($keys) ){
 			break;
 		}
-
-		//$r = _cmd($src, "MIGRATE", $dst->addr, $dst->port, "", 0, 10000, "KEYS", implode(" ", $keys));
-		$r = _cmd($src, "MIGRATE", $dst->addr, $dst->port, $keys[0],0, 10000);
+		
+		$params = array_merge(array($src, "MIGRATE", $dst->addr, $dst->port, "", 0, 10000, "KEYS"), $keys);
+		$r = call_user_func_array("_cmd", $params);
 
 		if("OK" != $r && "NOKEY" != $r){ //  NOKEY isn't an error, according to official documentation
 			print_log("[ERR][".__LINE__."] $r");exit(1);
