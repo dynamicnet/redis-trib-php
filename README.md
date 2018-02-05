@@ -67,6 +67,13 @@ Calculate, dispatch and move slots and keys in order to get a well balanced clus
 ~# redis-trib.php rebalance 127.0.0.1:6379
 ```
 
+### call
+Issues a command on each node in a cluster and display the result.
+
+```console
+~# redis-trib.php call 127.0.0.1:6379 cluster nodes
+```
+
 
 ## DISCLAIMER
  :warning: **NOT PRODUCTION READY**

@@ -263,22 +263,18 @@ function rebalance_cluster_cmd($args, $opts){
 
 			if( $threshold > 0 ){
 				if( count($node->slots) > 0 ){
-					$err_perc = abs(100-(100*$node->target_slot_count/count($node->slots)));
+					$err_perc = round(100-(100*$node->target_slot_count/count($node->slots)), 2);
 
-					if($err_perc > $threshold){
+					if(abs($err_perc) > $threshold){
 						$over_threshold = true;
 					}
-				} elseif( $expected > 0 ){
+				} elseif( $node->balance < 0 ){
 					$over_threshold = true;
 				}
 			}
 
-			if( $over_threshold > 0 ){
+			if( $over_threshold ){
 				$threshold_reached = true;
-			}
-
-			if( $balance < 0 ){
-				$has_negative_balance = true;
 			}
 		}
 
@@ -291,7 +287,7 @@ function rebalance_cluster_cmd($args, $opts){
 	// Because of rounding, it is possible that the balance of all nodes
 	// summed does not give 0. Make sure that nodes that have to provide
 	// slots are always matched by nodes receiving slots.
-	if( $total_balance > 0 && $has_negative_balance ){
+	if( $total_balance > 0 ){
 		while($total_balance > 0){
 			foreach( $MASTERS_NODES as $node ){
 				if( $node->balance < 0 && $total_balance > 0 ){
@@ -309,7 +305,7 @@ function rebalance_cluster_cmd($args, $opts){
 	} );
 
 	foreach( $MASTERS_NODES as $node ){
-		echo "{$node} balance is {$node->balance} slots\n";
+		print_log("{$node} balance is {$node->balance} slots");
 	}
 
 
@@ -331,13 +327,12 @@ function rebalance_cluster_cmd($args, $opts){
 		$numslots = min(abs($dst->balance), abs($src->balance));
 
 		if( $numslots > 0 ){
+			// Compute which slots are moving from src to dst
 			$slots_movements[] = [
-				"numslots" => $numslots,
 				"src"      => $src,
 				"dst"      => $dst,
-				"slots_to_move" => array_slice($src->slots,0,$numslots)
+				"slots_to_move" => array_splice($src->slots, 0, $numslots)
 			];
-			// Compute which slots are moving from src to dst
 		}
 
 		$dst->balance += $numslots;
@@ -352,11 +347,10 @@ function rebalance_cluster_cmd($args, $opts){
 		}
 	}
 
-	if( count($slots_movements) == 0 ){
-		print_log("[OK] Cluster not need to be rebalanced.");
-		exit(1);
-	}
-
+	/*foreach( $slots_movements as $sm ){
+		echo $sm["src"]."\n";
+		print_r($sm["slots_to_move"]);
+	}exit;*/
 
 	// So...moving slots
 	foreach( $slots_movements as $sm ){
@@ -370,17 +364,19 @@ function rebalance_cluster_cmd($args, $opts){
 
 		foreach( $sm["slots_to_move"] as $slot ){
 			if( !$simulate ){
-				print_log(">>> moving {$slot} from {$src} to {$dst}");
 				move_slot(
 					$src,
 					$dst,
 					$slot,
-					$MASTERS_NODES
+					$MASTERS_NODES,
+					["quiet"=>true,
+					"update"=>true]
 				);
 
 				echo "#";
+			} else {
+				echo str_repeat("#", $numslots);
 			}
-
 		}
 
 		print_log("\n[OK] Moving {$numslots} slots.");
@@ -413,7 +409,7 @@ function addnode_cluster_cmd($args, $opts){
 	$node_ping = ping_node_isok( $added_node );
 
 	if( ! $node_ping ){
-		print_log("[ERR] Existing cluster node {$added_node} seems offline");
+		print_log("[ERR] New node {$added_node} seems offline");
 		exit(1);
 	}
 
@@ -494,6 +490,28 @@ function check_cluster_cmd($args, $opts){
 	check_cluster( $opts );
 }
 
+function call_cluster_cmd($args, $opts){
+	global $CLUSTER;
+
+	$cmd = array_slice($args, 1);
+
+	# Load cluster information
+	$a_cluster_node = new Node($args[0]);
+	load_cluster_info_from_node($a_cluster_node);
+
+	print_log(">>> Calling ".implode(" ", $cmd));
+	foreach( $CLUSTER->get_nodes() as $n ){
+		$args[0] = $n;
+		$res = call_user_func_array("_cmd", $args);
+
+		if( !is_string($res) ){
+			$res = implode("\n", $res);
+		}
+
+		print("{$n}: {$res} \n\n");
+	}
+}
+
 function help_cluster_cmd(){
 	show_help();
 }
@@ -547,6 +565,24 @@ function test_cmd(){
 		print_log("[ERR] Error parsing '{$str_test}'");
 		exit(1);
 	}
+
+
+	$n = new Node();
+	$n->add_slot(870);
+	$n->add_slot(871);
+	$n->add_slot(872);
+
+	if( 3 != count($n->slots) ) {
+		print_log("[ERR] Error adding slots to node object");
+		exit(1);
+	}
+
+	$n->delete_slot(871);
+
+	if( 2 != count($n->slots) ) {
+		print_log("[ERR] Error removing slots from node object");
+		exit(1);
+	}	
 
 	print_log("[OK] All tests are ok");
 }
@@ -957,10 +993,13 @@ function show_cluster_info(){
 //
 // Options:
 // cold    -- Move keys without opening slots / reconfiguring the nodes.
+// update  -- Update node->slots for source/target nodes.
+// quiet   -- Don't print info messages.
 function move_slot( $src, $dst, $slot, $nodes, $opts=[]){
-	$cold  = ( isset($opts["cold"])&&$opts["cold"] );
-	$fix   = ( isset($opts["fix"])&&$opts["fix"] );
-	$quiet = ( isset($opts["quiet"])&&$opts["quiet"] );
+	$cold   = ( isset($opts["cold"])&&$opts["cold"] );
+	$fix    = ( isset($opts["fix"])&&$opts["fix"] );
+	$quiet  = ( isset($opts["quiet"])&&$opts["quiet"] );
+	$update = ( isset($opts["update"])&&$opts["update"] );
 
 	if( ! $quiet ){
 		print_log("Moving slot {$slot} from {$src} to {$dst}");
@@ -992,6 +1031,13 @@ function move_slot( $src, $dst, $slot, $nodes, $opts=[]){
 
 		if("OK" != $r && "NOKEY" != $r){ //  NOKEY isn't an error, according to official documentation
 			print_log("[ERR][".__LINE__."] $r");exit(1);
+		}
+
+
+		// Update the node logical config
+		if( $update ){
+			$src->delete_slot($slot);
+			$dst->add_slot($slot);
 		}
 	}
 
@@ -1373,43 +1419,6 @@ function wait_cluster_join(){
 
 
 function _cmd(){
-	$function = "_cmdInHouse";
-	//$function = "_cmd_cheprasov";
-
-	return call_user_func_array($function, func_get_args());
-}
-
-
-function _cmd_cheprasov(){
-	$args = func_get_args();
-	$node = $args[0];
-
-	$Redis = new CheprasovRedisClient([
-		"server" => (string)$node
-	]);
-
-	try {
-		$return = $Redis->executeRaw( array_slice($args, 1) );
-	} catch( RedisClient\Exception\MovedResponseException $e ){
-		$args[0] = new Node($e->getServer());
-
-		$return = call_user_func_array("_cmd", $args);
-	}
-
-	var_dump($return);
-	if( is_array($return) ){
-		return $return;
-	}
-
-	if( true === $return ){
-		return "OK";
-	}
-
-	return trim($return);
-}
-
-
-function _cmdInHouse(){
 	$argv = func_get_args();
 	$node = $argv[0];
 
@@ -1608,6 +1617,16 @@ class Node {
 	public function __tostring(){
 		return $this->addr.":".$this->port;
 	}
+
+	public function delete_slot($slot){
+		if (($key = array_search($slot, $this->slots)) !== false) {
+			unset($this->slots[$key]);
+		}
+	}
+	
+	public function add_slot($slot){	
+		$this->slots[] = $slot;
+	}
 }
 
 
@@ -1651,6 +1670,7 @@ $COMMANDS=[
 	"rebalance" => ["rebalance_cluster_cmd", 1, "host:port"],
 	"add-node"  => ["addnode_cluster_cmd", 2, "new_host:new_port existing_host:existing_port"],
 	"del-node"  => ["delnode_cluster_cmd", 2, "host:port node_id"],
+	"call"      => ["call_cluster_cmd", -2, "host:port command arg arg .. arg"],
 	"help"    => ["help_cluster_cmd", 0, "(show this help)"],
 	"test"    => ["test_cmd", 0, "Launch test"],
 ];
